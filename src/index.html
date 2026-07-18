@@ -7,7 +7,7 @@
             http-equiv="Content-Security-Policy"
             content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: local-media:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'"
         />
-        <title>Document</title>
+        <title>SomeApp</title>
         <!-- Single ES-module entry point. app.js imports the other 7 modules;
              each still loads exactly once, in dependency order. -->
         <script type="module" src="js/app.js"></script>
@@ -223,6 +223,29 @@
                             >
                                 <img src="assets/case-sensitive.svg" alt="Aa" />
                             </button>
+                            <button
+                                type="button"
+                                class="titlebar-search-action-btn"
+                                id="titlebar-search-replace-btn"
+                                title="Find and replace (Ctrl+H)"
+                            >
+                                <!-- inline SVG (swap arrows) so no new icon
+                                     asset file is required -->
+                                <svg
+                                    viewBox="0 0 16 16"
+                                    fill="none"
+                                    stroke="#333333"
+                                    stroke-width="1.5"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <path d="M3.5 5.5h8" />
+                                    <path d="M9.5 3.5l2 2-2 2" />
+                                    <path d="M12.5 10.5h-8" />
+                                    <path d="M6.5 8.5l-2 2 2 2" />
+                                </svg>
+                            </button>
                         </div>
 
                         <!-- results dropdown for "all documents" scope; opens
@@ -231,6 +254,39 @@
                             class="titlebar-search-results hidden"
                             id="titlebar-search-results"
                         ></div>
+
+                        <!-- replace row (current-document scope only); fuses
+                         under the bar in the same slot as the results
+                         dropdown — the two are mutually exclusive -->
+                        <div
+                            class="titlebar-search-replace-row hidden"
+                            id="titlebar-search-replace-row"
+                        >
+                            <input
+                                type="text"
+                                class="titlebar-replace-input"
+                                id="titlebar-replace-input"
+                                placeholder="Replace with..."
+                                autocomplete="off"
+                                spellcheck="false"
+                            />
+                            <button
+                                type="button"
+                                class="titlebar-replace-action"
+                                id="titlebar-replace-one-btn"
+                                title="Replace current match (Enter)"
+                            >
+                                Replace
+                            </button>
+                            <button
+                                type="button"
+                                class="titlebar-replace-action"
+                                id="titlebar-replace-all-btn"
+                                title="Replace all matches (Ctrl+Enter)"
+                            >
+                                All
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -713,15 +769,11 @@
 
                             <div id="panel-about" class="settings-panel">
                                 <h2>About</h2>
-                                <h3>(name of app)</h3>
+                                <h3>SomeApp</h3>
                                 <div class="about">
                                     <div class="setting-card">
                                         <p>Version: v0.0.1</p>
                                         <p>Developer: grateful papaya</p>
-                                        <p>
-                                            Built with: Electron, CodeMirror6,
-                                            KaTeX
-                                        </p>
                                         <p>
                                             Contact:
                                             <a href="https://google.com"

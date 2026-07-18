@@ -950,15 +950,15 @@ body.titlebar-results-open .titlebar-bar {
        still reach them instead of starting a window drag */
     -webkit-app-region: drag;
     transition:
-        box-shadow 0.15s ease,
         background-color 0.15s ease,
         padding 0.22s cubic-bezier(0.25, 0.1, 0.25, 1),
         width 0.22s cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
-.titlebar-search-bar:focus-within {
-    box-shadow: 0 0 0 3px rgba(24, 108, 217, 0.08);
-}
+/* No :focus-within glow on the bar — the input's own caret and the bar's
+   background are enough of a focus cue, and a ring around a titlebar-height
+   pill read as visual noise. Removing it also means the transition below no
+   longer animates a box-shadow that never changes. */
 
 /* When the all-documents results dropdown is open, fuse it visually with
    the bar above it: flatten the bar's bottom corners (so the shared edge
@@ -972,9 +972,6 @@ body.titlebar-results-open .titlebar-bar {
 body.titlebar-results-open .titlebar-search-bar {
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
-    /* suppress the focus glow while fused — otherwise its ring would draw a
-       line straight across the seam between bar and results */
-    box-shadow: none;
     /* while the results dropdown is open the user is actively searching, not
        dragging the window — drop the bar's drag region entirely so it can't
        geometrically swallow pointer events (e.g. the results scrollbar thumb)
@@ -1178,6 +1175,16 @@ body.titlebar-results-open .titlebar-search-bar {
     width: 80%;
     height: 80%;
 }
+/* the replace toggle uses an inline SVG instead of an asset file; sized a
+   touch smaller than the 80% img icons because its strokes read heavier */
+.titlebar-search-action-btn svg {
+    width: 66%;
+    height: 66%;
+    display: block;
+}
+.titlebar-search-action-btn.active svg {
+    stroke: #186cd9; /* same accent the .active img filter tints to */
+}
 
 /* prev/next both use the same arrow-down.svg; prev is just next rotated
    180° so it points up instead of needing a second icon asset */
@@ -1276,6 +1283,82 @@ body.titlebar-results-open .titlebar-search-bar {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* ── replace row (current-document scope) ──
+   Occupies the same under-the-bar slot as the results dropdown (the two are
+   mutually exclusive) and fuses with the bar the same way: shared
+   background, straight seam on top, rounded outline only on sides/bottom.
+   The body.titlebar-results-open drag-neutralization + corner-flattening
+   rules cover this row too — titlebar-search.js sets that class whenever
+   EITHER panel is open. */
+.titlebar-search-replace-row {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    box-sizing: border-box;
+    padding: 4px;
+    background-color: #fcfcfc;
+    border: 1px solid transparent;
+    border-top: none;
+    border-bottom-left-radius: 9px;
+    border-bottom-right-radius: 9px;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.06);
+    z-index: 1009;
+    -webkit-app-region: no-drag;
+}
+.titlebar-search-replace-row.hidden {
+    display: none;
+}
+
+.titlebar-replace-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 6px;
+    outline: none;
+    background: #ffffff;
+    font-size: 0.84rem;
+    font-family: inherit;
+    color: #212529;
+    -webkit-app-region: no-drag;
+}
+.titlebar-replace-input:focus {
+    /* border accent only, no glow ring — matches the search bar above */
+    border-color: rgba(24, 108, 217, 0.45);
+}
+.titlebar-replace-input::placeholder {
+    color: #999999;
+}
+
+/* parent-prefixed to out-specify the global button[type="button"] base rule
+   (element+attribute selector) that would otherwise force opacity 0.6 and a
+   #d0d0d0 hover onto these */
+.titlebar-search-replace-row .titlebar-replace-action {
+    flex-shrink: 0;
+    height: 26px;
+    padding: 0 10px;
+    border: none;
+    border-radius: 6px;
+    background-color: rgba(24, 108, 217, 0.12);
+    color: #186cd9;
+    font-size: 0.8rem;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    opacity: 1;
+    -webkit-app-region: no-drag;
+    transition: background-color 0.15s ease;
+}
+.titlebar-search-replace-row .titlebar-replace-action:hover {
+    background-color: rgba(24, 108, 217, 0.2);
+    opacity: 1;
 }
 
 .titlebar-search-empty {

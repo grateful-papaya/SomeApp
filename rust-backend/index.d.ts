@@ -37,9 +37,11 @@ export declare function createNewFile(parentPath: string, fileName: string): str
 export declare function createNewFolder(parentPath: string, folderName: string): string
 
 /**
- * Create a vault at a folder the user picked. The picked folder becomes the
- * vault itself -- no "Markdown Vault" subfolder -- since the user already
- * chose exactly where they want it.
+ * Create a vault under a folder the user picked. The vault is a "Markdown
+ * Vault" subfolder of that choice, not the folder itself: the picker lets
+ * people select somewhere broad like Desktop or a whole drive root, and
+ * scattering images/, .backup/ and .conf/ directly into it would be rude.
+ * The returned path is the subfolder, which is what becomes the workspace.
  */
 export declare function createVaultAt(path: string): string
 

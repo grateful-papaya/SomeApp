@@ -39,6 +39,9 @@ const TitlebarSearchManager = (() => {
   let cmMatches = [];
   let cmActiveIndex = -1;
 
+  // replace row (current-document scope only)
+  let replaceOpen = false;
+
   const escapeHtml = (s) =>
     s.replace(
       /[&<>"']/g,
@@ -52,8 +55,27 @@ const TitlebarSearchManager = (() => {
         })[c],
     );
 
-  const getScope = () => getSetting(SETTING_KEY) || DEFAULT_SCOPE;
-  const setScope = (scope) => setSetting(SETTING_KEY, scope);
+  // Scope is held in memory as the single source of truth for the session
+  // and only MIRRORED into settings for persistence. Previously every read
+  // went back through getSetting(), so a scope change and the search that
+  // immediately followed it raced: if setSetting doesn't update its cache
+  // synchronously (async persist, write-through on next tick, etc.) the
+  // very next getScope() still returned the OLD value — which is exactly
+  // why Ctrl+F kept running a vault-wide search despite setting "current"
+  // one line earlier. Reading a plain variable can't race.
+  let activeScope = null; // lazily seeded from the persisted setting
+
+  const getScope = () => {
+    if (activeScope === null) {
+      activeScope = getSetting(SETTING_KEY) || DEFAULT_SCOPE;
+    }
+    return activeScope;
+  };
+
+  const setScope = (scope) => {
+    activeScope = scope; // takes effect immediately
+    setSetting(SETTING_KEY, scope); // persisted at whatever pace it likes
+  };
 
   // ── bar mode (breadcrumb path <-> search) ──
   // Exactly one segment is expanded at a time; the other collapses to a
@@ -73,6 +95,7 @@ const TitlebarSearchManager = (() => {
       // the collapsed square button.
       closeScopeMenu();
       closeResultsDropdown();
+      closeReplaceRow();
       updatePathDisplay();
     } else if (focus && input) {
       requestAnimationFrame(() => input.focus({ preventScroll: true }));
@@ -130,6 +153,11 @@ const TitlebarSearchManager = (() => {
     prevBtn: document.getElementById("titlebar-search-prev-btn"),
     nextBtn: document.getElementById("titlebar-search-next-btn"),
     caseBtn: document.getElementById("titlebar-search-case-btn"),
+    replaceToggleBtn: document.getElementById("titlebar-search-replace-btn"),
+    replaceRow: document.getElementById("titlebar-search-replace-row"),
+    replaceInput: document.getElementById("titlebar-replace-input"),
+    replaceOneBtn: document.getElementById("titlebar-replace-one-btn"),
+    replaceAllBtn: document.getElementById("titlebar-replace-all-btn"),
   });
 
   // ── scope dropdown (opens in-place under the bar, same as Firefox's
@@ -187,13 +215,41 @@ const TitlebarSearchManager = (() => {
   // but didn't reliably neutralize it, so this drives the same no-drag
   // override directly from JS at the exact moments the dropdown opens and
   // closes, via a class read by layout.css.
-  const setResultsOpenState = (isOpen) => {
-    document.body.classList.toggle("titlebar-results-open", isOpen);
+  // Both under-the-bar panels (results dropdown AND replace row) sit inside
+  // the drag-region overlap, so the body class is on whenever either is
+  // visible — computed from actual state rather than toggled ad hoc, so the
+  // two panels can't fight over it.
+  const syncFusedState = () => {
+    const resultsVisible =
+      !els().resultsContainer?.classList.contains("hidden");
+    document.body.classList.toggle(
+      "titlebar-results-open",
+      resultsVisible || replaceOpen,
+    );
   };
 
   const closeResultsDropdown = () => {
     els().resultsContainer?.classList.add("hidden");
-    setResultsOpenState(false);
+    syncFusedState();
+  };
+
+  // ── replace row (fused under the bar, current-document scope only) ──
+  const openReplaceRow = () => {
+    // Replace only makes sense inside the open document; the results
+    // dropdown occupies the same slot, so it yields.
+    closeResultsDropdown();
+    closeScopeMenu();
+    replaceOpen = true;
+    els().replaceRow?.classList.remove("hidden");
+    els().replaceToggleBtn?.classList.add("active");
+    syncFusedState();
+  };
+
+  const closeReplaceRow = () => {
+    replaceOpen = false;
+    els().replaceRow?.classList.add("hidden");
+    els().replaceToggleBtn?.classList.remove("active");
+    syncFusedState();
   };
 
   // ── "all documents" scope ──
@@ -222,7 +278,7 @@ const TitlebarSearchManager = (() => {
 
     resultsContainer.innerHTML = "";
     resultsContainer.classList.remove("hidden");
-    setResultsOpenState(true);
+    syncFusedState();
     closeScopeMenu();
 
     if (allResults.length === 0) {
@@ -267,14 +323,21 @@ const TitlebarSearchManager = (() => {
       row.appendChild(snippet);
 
       row.addEventListener("click", () => {
-        setAllActiveIndex(idx, { openFile: true, scroll: false });
+        setAllActiveIndex(idx, {
+          openFile: true,
+          scroll: false,
+          focusEditor: true,
+        });
       });
 
       resultsContainer.appendChild(row);
     });
   };
 
-  const setAllActiveIndex = (idx, { openFile = false, scroll = true } = {}) => {
+  const setAllActiveIndex = (
+    idx,
+    { openFile = false, scroll = true, focusEditor = false } = {},
+  ) => {
     if (allResults.length === 0) return;
     allActiveIndex =
       ((idx % allResults.length) + allResults.length) % allResults.length;
@@ -298,11 +361,11 @@ const TitlebarSearchManager = (() => {
 
     if (openFile) {
       const match = allResults[allActiveIndex];
-      openResultInEditor(match);
+      openResultInEditor(match, { focusEditor });
     }
   };
 
-  const openResultInEditor = (match) => {
+  const openResultInEditor = (match, { focusEditor = false } = {}) => {
     // Instant, not smooth — an animated sidebar scroll here reads as the
     // whole app jarringly shifting right as a search result is clicked.
     revealInSidebar(match.path, "instant");
@@ -326,7 +389,12 @@ const TitlebarSearchManager = (() => {
           selection: { anchor: pos, head: pos + (match.matchLen || 0) },
         });
         scrollMatchIntoView(view, pos);
-        view.focus({ preventScroll: true });
+        // Only hand focus to the editor when the user explicitly clicked a
+        // result row. During Enter/arrow cycling this used to steal focus
+        // from the search input mid-navigation, so the NEXT Enter (or worse,
+        // the next typed character) landed inside the document instead of
+        // the search bar.
+        if (focusEditor) view.focus({ preventScroll: true });
       } catch (err) {
         console.error("Failed to jump to search match:", err);
       }
@@ -378,7 +446,7 @@ const TitlebarSearchManager = (() => {
     updateNavButtons();
   };
 
-  const runCurrentSearch = (query) => {
+  const runCurrentSearch = (query, { anchorPos = null } = {}) => {
     const view = getEditorView();
     cmMatches = [];
     cmActiveIndex = -1;
@@ -410,7 +478,16 @@ const TitlebarSearchManager = (() => {
     updateNavButtons();
 
     if (cmMatches.length > 0) {
-      setCmActiveIndex(0);
+      // Land on the match nearest the cursor (first match at/after it,
+      // wrapping to the top) instead of always yanking the view back to
+      // match #1 — re-searching while typing no longer teleports you to
+      // the top of the document.
+      let startIdx = 0;
+      if (anchorPos != null) {
+        const found = cmMatches.findIndex((m) => m.from >= anchorPos);
+        startIdx = found === -1 ? 0 : found;
+      }
+      setCmActiveIndex(startIdx);
     } else {
       updateCount();
     }
@@ -454,7 +531,11 @@ const TitlebarSearchManager = (() => {
         selection: { anchor: match.from, head: match.to },
       });
       scrollMatchIntoView(view, match.from);
-      view.focus({ preventScroll: true });
+      // Deliberately NOT view.focus() here. This runs on the 150ms typing
+      // debounce, so focusing the editor meant that halfway through typing a
+      // query, focus silently jumped into the document and the rest of the
+      // keystrokes were typed INTO THE FILE. Focus is handed back to the
+      // editor only on Escape (see the input keydown handler).
     } catch (err) {
       console.error("Failed to select search match:", err);
     }
@@ -463,6 +544,7 @@ const TitlebarSearchManager = (() => {
   // ── shared: run whichever scope is active ──
   const runSearch = (query) => {
     if (getScope() === "all") {
+      closeReplaceRow();
       runAllSearch(query);
     } else {
       closeResultsDropdown();
@@ -471,8 +553,77 @@ const TitlebarSearchManager = (() => {
         clearCmHighlights();
         return;
       }
-      runCurrentSearch(query);
+      const view = getEditorView();
+      const anchorPos = view ? view.state.selection.main.from : null;
+      runCurrentSearch(query, { anchorPos });
     }
+  };
+
+  // ── replace (current-document scope only) ──
+  // Guard against stale offsets: the user can edit the document between the
+  // search pass and the replace click, which would make cmMatches point at
+  // the wrong text. Verify the slice still equals the query before touching
+  // the doc; on mismatch, silently re-run the search instead of corrupting.
+  const matchStillValid = (view, match, query) => {
+    const slice = view.state.sliceDoc(match.from, match.to);
+    return caseSensitive
+      ? slice === query
+      : slice.toLowerCase() === query.toLowerCase();
+  };
+
+  const replaceCurrent = () => {
+    if (getScope() !== "current") return;
+    const view = getEditorView();
+    const { input, replaceInput } = els();
+    if (!view || !input || cmMatches.length === 0 || cmActiveIndex < 0) return;
+
+    const query = input.value.trim();
+    const match = cmMatches[cmActiveIndex];
+    if (!query || !match) return;
+
+    if (!matchStillValid(view, match, query)) {
+      runCurrentSearch(query, { anchorPos: view.state.selection.main.from });
+      return;
+    }
+
+    const replacement = replaceInput?.value ?? "";
+    view.dispatch({
+      changes: { from: match.from, to: match.to, insert: replacement },
+    });
+    // Anchor just past the inserted text so the active match advances to the
+    // next occurrence — even when the replacement itself contains the query
+    // (e.g. "cat" -> "cats"), which would otherwise loop in place forever.
+    runCurrentSearch(query, { anchorPos: match.from + replacement.length });
+  };
+
+  const replaceAll = () => {
+    if (getScope() !== "current") return;
+    const view = getEditorView();
+    const { input, replaceInput } = els();
+    if (!view || !input || cmMatches.length === 0) return;
+
+    const query = input.value.trim();
+    if (!query) return;
+
+    if (!cmMatches.every((m) => matchStillValid(view, m, query))) {
+      runCurrentSearch(query, { anchorPos: view.state.selection.main.from });
+      showToast("Document changed — search refreshed. Try again.");
+      return;
+    }
+
+    const replacement = replaceInput?.value ?? "";
+    const count = cmMatches.length;
+    // cmMatches is ascending and non-overlapping by construction, so all
+    // changes can go out in a single dispatch (one undo step).
+    view.dispatch({
+      changes: cmMatches.map((m) => ({
+        from: m.from,
+        to: m.to,
+        insert: replacement,
+      })),
+    });
+    showToast(`Replaced ${count} occurrence${count === 1 ? "" : "s"}.`);
+    runCurrentSearch(query);
   };
 
   const goToNext = () => {
@@ -507,6 +658,7 @@ const TitlebarSearchManager = (() => {
     clearAllResults();
     clearCmHighlights();
     closeScopeMenu();
+    closeReplaceRow();
   };
 
   // ── wiring ──
@@ -577,6 +729,7 @@ const TitlebarSearchManager = (() => {
         if (newScope && newScope !== getScope()) {
           setScope(newScope);
           syncScopeMenuSelection();
+          if (newScope === "all") closeReplaceRow();
           // Re-run whatever query is currently typed under the new scope.
           clearAllResults();
           clearCmHighlights();
@@ -618,13 +771,31 @@ const TitlebarSearchManager = (() => {
         e.preventDefault();
         if (els().scopeWrapper?.classList.contains("open")) {
           closeScopeMenu();
+        } else if (replaceOpen) {
+          closeReplaceRow();
         } else if (input.value.trim()) {
-          clearSearch();
+          // Escape no longer nukes the query — it hands focus back to the
+          // editor with the cursor sitting on the current match, matching
+          // find-bar muscle memory everywhere else (VS Code, browsers).
+          // The query survives, so the next Ctrl+F re-selects it for reuse.
+          const view = getEditorView();
+          if (view && getCurrentOpenFile()) {
+            view.focus({ preventScroll: true });
+          } else {
+            input.blur();
+          }
         } else {
           // Empty input: step all the way back out to breadcrumb mode.
           input.blur();
           setMode("path");
         }
+        return;
+      }
+      // With the replace row open, Tab hops down into the replace input.
+      if (e.key === "Tab" && !e.shiftKey && replaceOpen) {
+        e.preventDefault();
+        els().replaceInput?.focus({ preventScroll: true });
+        els().replaceInput?.select();
         return;
       }
       if (e.key === "Enter") {
@@ -671,6 +842,7 @@ const TitlebarSearchManager = (() => {
         if (!bar?.contains(e.target)) {
           closeScopeMenu();
           closeResultsDropdown();
+          closeReplaceRow();
           return;
         }
         if (
@@ -683,19 +855,152 @@ const TitlebarSearchManager = (() => {
       true,
     );
 
-    // Global shortcut: Ctrl/Cmd+F focuses the titlebar search bar instead of
-    // the browser's native find bar (which is disabled anyway in this shell).
-    document.addEventListener("keydown", (e) => {
-      const isFindShortcut =
-        (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f";
-      if (!isFindShortcut) return;
-      e.preventDefault();
-      if (els().barContainer?.classList.contains("mode-path")) {
-        setMode("search", { focus: true });
-      } else {
+    // ── global find/replace shortcuts ──
+    // Registered in the CAPTURE phase with stopPropagation, which is the
+    // whole fix for the "CodeMirror's own panel appears" problem: CodeMirror
+    // registers its keymaps (incl. the built-in search panel bindings) on
+    // its contentDOM, so with a plain bubble-phase document listener, CM ran
+    // FIRST whenever the editor had focus — it opened its native panel and
+    // this handler never stood a chance. Capture phase fires top-down before
+    // the event ever reaches contentDOM, so CM never sees these keys at all.
+    //
+    // Scope mapping is now deterministic instead of sticky-last-used:
+    //   Ctrl/Cmd+F        -> current document (falls back to "all" if no
+    //                        document is open)
+    //   Ctrl/Cmd+Shift+F  -> all documents
+    //   Ctrl/Cmd+H        -> current document + replace row
+    // The scope dropdown still exists for the mouse, but the shortcuts
+    // always mean the same thing — pressing Ctrl+F can no longer surprise
+    // you with a vault-wide file list just because that was the last scope
+    // picked with the mouse days ago.
+
+    // If the editor holds a short single-line selection, carry it into the
+    // search box (standard find-bar behavior: select a word, Ctrl+F, done).
+    const selectionPrefill = () => {
+      const view = getEditorView();
+      if (!view) return "";
+      const sel = view.state.selection.main;
+      if (sel.empty) return "";
+      const text = view.state.sliceDoc(sel.from, sel.to);
+      if (!text || text.includes("\n") || text.length > 200) return "";
+      return text;
+    };
+
+    const applyShortcutScope = (scope) => {
+      if (scope === getScope()) return;
+      setScope(scope);
+      syncScopeMenuSelection();
+      clearAllResults();
+      clearCmHighlights();
+    };
+
+    const openSearchViaShortcut = ({ scope, withReplace = false } = {}) => {
+      applyShortcutScope(scope);
+      if (withReplace) openReplaceRow();
+      else closeReplaceRow();
+
+      const prefill = selectionPrefill();
+      setMode("search", { focus: true });
+      requestAnimationFrame(() => {
+        const { input: inp } = els();
+        if (!inp) return;
+        if (prefill) inp.value = prefill;
+        inp.focus({ preventScroll: true });
+        inp.select();
+        const query = inp.value.trim();
+        if (query) runSearch(query);
+      });
+    };
+
+    document.addEventListener(
+      "keydown",
+      (e) => {
+        if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+
+        // Match on the PHYSICAL key (e.code) first, falling back to e.key.
+        // With a Hangul IME active, e.key for a Ctrl combo can come through
+        // as a jamo or as "Process" depending on the input method and
+        // compositor, which would silently break these shortcuts in exactly
+        // the state you'd normally be typing in. e.code is layout- and
+        // IME-independent — KeyF is KeyF regardless of what the IME would
+        // have produced.
+        const matches = (code, letter) =>
+          e.code === code || (!e.code && e.key.toLowerCase() === letter);
+
+        if (matches("KeyF", "f")) {
+          e.preventDefault();
+          e.stopPropagation();
+          // Shift is the only thing that widens the scope: Ctrl+Shift+F is
+          // always the whole vault, plain Ctrl+F is always the open document
+          // (falling back to vault-wide only when nothing is open at all).
+          const scope =
+            !e.shiftKey && getCurrentOpenFile() ? "current" : "all";
+          openSearchViaShortcut({ scope });
+          return;
+        }
+
+        if (matches("KeyH", "h") && !e.shiftKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!getCurrentOpenFile()) {
+            showToast("No document is currently open.");
+            return;
+          }
+          openSearchViaShortcut({ scope: "current", withReplace: true });
+        }
+      },
+      true,
+    );
+
+    // ── replace row wiring ──
+    const { replaceToggleBtn, replaceInput, replaceOneBtn, replaceAllBtn } =
+      els();
+
+    replaceToggleBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (replaceOpen) {
+        closeReplaceRow();
+        return;
+      }
+      if (!getCurrentOpenFile()) {
+        showToast("No document is currently open.");
+        return;
+      }
+      // Mouse path mirrors Ctrl+H: replace implies current-document scope.
+      applyShortcutScope("current");
+      openReplaceRow();
+      const query = input.value.trim();
+      if (query) runSearch(query);
+      els().replaceInput?.focus({ preventScroll: true });
+    });
+
+    replaceInput?.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeReplaceRow();
+        input.focus({ preventScroll: true });
+        return;
+      }
+      if (e.key === "Tab" && e.shiftKey) {
+        e.preventDefault();
         input.focus({ preventScroll: true });
         input.select();
+        return;
       }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (e.ctrlKey || e.metaKey) replaceAll();
+        else replaceCurrent();
+      }
+    });
+
+    replaceOneBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      replaceCurrent();
+    });
+    replaceAllBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      replaceAll();
     });
   };
 
