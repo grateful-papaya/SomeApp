@@ -19,8 +19,8 @@
     }
   },
   "build": {
-    "appId": "com.yourname.nib",
-    "productName": "Nib",
+    "appId": "com.yourname.SomeApp",
+    "productName": "SomeApp",
     "asar": false,
     "directories": {
       "output": "dist"

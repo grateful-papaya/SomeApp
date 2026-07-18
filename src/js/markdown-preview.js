@@ -972,8 +972,8 @@ export async function getMarkdownExtensions() {
         this.patch = () => {
           try {
             const ms = view.inputState && view.inputState.mouseSelection;
-            if (ms && !ms._nibScrollPatched) {
-              ms._nibScrollPatched = true;
+            if (ms && !ms._SomeAppScrollPatched) {
+              ms._SomeAppScrollPatched = true;
               ms.setScrollSpeed = () => {}; // rAF loop owns drag scrolling
             }
           } catch (_) {

@@ -4,7 +4,7 @@
 //   npx esbuild src/codemirror-entry.js --bundle --format=esm \
 //     --outfile=src/js/libs/codemirror.js
 //
-// Re-exports the CodeMirror surface Nib's markdown/* modules destructure
+// Re-exports the CodeMirror surface SomeApp's markdown/* modules destructure
 // from the dynamic `await import("./libs/codemirror.js")` in
 // markdown-preview.js. Every name below was verified against the installed
 // package's actual exports (not assumed) before being added here.

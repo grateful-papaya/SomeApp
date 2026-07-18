@@ -94,7 +94,7 @@ const TitlebarSearchManager = (() => {
     lastPathSignature = signature;
 
     if (!vaultPath) {
-      pathText.textContent = "Nib";
+      pathText.textContent = "SomeApp";
       return;
     }
 
