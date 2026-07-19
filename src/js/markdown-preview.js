@@ -144,6 +144,19 @@ export async function getMarkdownExtensions() {
   const { StateField } = cm;
   const { WidgetType } = cm;
   const { insertNewlineContinueMarkupCommand } = cm;
+
+  // ── Read mode ─────────────────────────────────────────────────────────────
+  // Reveal-on-touch exists so the caret can reach the source it is about to
+  // edit. In read mode there is no editing, so there is nothing to reveal:
+  // every construct — markdown syntax, math, widgets alike — stays rendered no
+  // matter where the selection goes, and selecting text across the document
+  // never flips anything back to raw. Both facets are checked because
+  // read-only and non-editable are separate switches in CodeMirror and either
+  // one means "reader". If Nib signals read mode some other way, this is the
+  // single place to teach it.
+  const isReadMode = (state) =>
+    state.readOnly || state.facet(EditorView.editable) === false;
+
   // Optional bundle exports — feature-detected so the editor still works if
   // the vendored bundle predates them.
   const languages = cm.languages || null; // @codemirror/language-data
@@ -736,14 +749,20 @@ export async function getMarkdownExtensions() {
   function assemble(scan, state, prevSig) {
     const doc = state.doc;
     const sel = state.selection.main;
-    const aLine = doc.lineAt(sel.from).number;
-    const bLine = doc.lineAt(sel.to).number;
+    // Read mode: no line counts as "the caret's line" and no range counts as
+    // touched, so lineItems all emit `off` and every rangeItem stays rendered.
+    // -1 can never equal a real line number, so the signature stays stable
+    // across selection moves and toggling the mode always invalidates it.
+    const readMode = isReadMode(state);
+    const aLine = readMode ? -1 : doc.lineAt(sel.from).number;
+    const bLine = readMode ? -1 : doc.lineAt(sel.to).number;
     const items = scan.rangeItems;
     const bits = new Uint8Array(items.length);
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      if (sel.from <= it.tTo && sel.to >= it.tFrom) bits[i] = 1;
-    }
+    if (!readMode)
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (sel.from <= it.tTo && sel.to >= it.tFrom) bits[i] = 1;
+      }
     if (
       prevSig &&
       prevSig.aLine === aLine &&
@@ -1119,6 +1138,19 @@ export async function getMarkdownExtensions() {
           this.pendingRefresh = true;
           return;
         }
+        // ── Read mode toggle ──────────────────────────────────────────────
+        // Flipping in or out of read mode changes every reveal decision but
+        // touches neither the doc, the selection, nor the syntax tree, so
+        // none of the branches below would fire and whatever happened to be
+        // revealed at the moment of the flip would stay raw until the next
+        // edit. Reassemble immediately, and drop any drag bookkeeping since
+        // the gesture's reveal state no longer means anything.
+        if (isReadMode(update.startState) !== isReadMode(update.state)) {
+          this.pointerDragging = false;
+          this.pendingRefresh = false;
+          this.refresh(update.state, false);
+          return;
+        }
         // ── Pointer-drag live reveal ──────────────────────────────────────
         // While a mouse selection is being extended, re-assemble reveal
         // state LIVE, in both directions: content the selection sweeps
@@ -1442,10 +1474,12 @@ export async function getMarkdownExtensions() {
 
     const items = scan.items;
     const bits = new Uint8Array(items.length);
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      if (sel.from <= it.tTo && sel.to >= it.tFrom) bits[i] = 1;
-    }
+    // Read mode: nothing reveals, so every equation keeps its KaTeX render.
+    if (!isReadMode(state))
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (sel.from <= it.tTo && sel.to >= it.tFrom) bits[i] = 1;
+      }
     if (prev && prev.items === items && sameBits(prev.bits, bits)) return prev;
 
     const decos = [];
@@ -1481,6 +1515,11 @@ export async function getMarkdownExtensions() {
       // reveal.sync nudge stays for the post-drag reconcile of anything the
       // plugin deferred (here it just forces one fresh reassemble).
       if (tr.isUserEvent("reveal.sync")) return mathAssemble(tr.state, null);
+      // Toggling read mode changes every reveal decision without touching the
+      // doc or the selection, so it needs its own trigger and a fresh
+      // assemble (the cached bits are exactly what's now wrong).
+      if (isReadMode(tr.startState) !== isReadMode(tr.state))
+        return mathAssemble(tr.state, null);
       if (!tr.docChanged && !tr.selection) return value;
       return mathAssemble(tr.state, tr.docChanged ? null : value);
     },

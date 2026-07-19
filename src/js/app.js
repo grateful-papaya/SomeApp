@@ -53,6 +53,7 @@ import {
   getFileScrollPositions,
   getFileCursorPositions,
   getFileReadingModeStates,
+  applyReadingModeToEditor,
   persistScrollPositions,
   persistCursorPositions,
 } from "./state/editorState.js";
@@ -659,12 +660,13 @@ const EventBinder = {
         ? "Toggle Editing Mode"
         : "Toggle Reading Mode";
       if (titleInput) titleInput.readOnly = nextMode;
-      if (getEditorView()?.contentDOM) {
-        getEditorView().contentDOM.setAttribute(
-          "contenteditable",
-          nextMode ? "false" : "true",
-        );
-      }
+      // Was: contentDOM.setAttribute("contenteditable", …). CodeMirror owns
+      // that attribute and rewrites it from its own facet, and the write told
+      // the editor's state nothing — so the live preview kept revealing raw
+      // markdown/math and the table kept offering its editing UI. This routes
+      // through EditorState.readOnly / EditorView.editable instead, which the
+      // preview extensions read.
+      applyReadingModeToEditor();
       Utils.showToastMsg(
         nextMode ? "Reading Mode enabled." : "Editing Mode enabled.",
       );

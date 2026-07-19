@@ -800,12 +800,12 @@ export async function getTableExtension() {
     }
   }
 
-  function makeCell(tag, r, c, raw, align) {
+  function makeCell(tag, r, c, raw, align, editable) {
     const cell = document.createElement(tag);
     cell.dataset.r = String(r);
     cell.dataset.c = String(c);
     cell.dataset.raw = raw;
-    cell.contentEditable = "true";
+    cell.contentEditable = editable === false ? "false" : "true";
     cell.spellcheck = false;
     cell.innerHTML = renderInline(raw);
     renderTableMath(cell);
@@ -815,12 +815,13 @@ export async function getTableExtension() {
 
   function renderTable(wrap) {
     const m = wrap._model;
+    const editable = !wrap._readOnly;
     const table = wrap.querySelector("table");
     table.textContent = "";
     const thead = document.createElement("thead");
     const hr = document.createElement("tr");
     m.header.forEach((raw, c) =>
-      hr.appendChild(makeCell("th", -1, c, raw, m.aligns[c])),
+      hr.appendChild(makeCell("th", -1, c, raw, m.aligns[c], editable)),
     );
     thead.appendChild(hr);
     table.appendChild(thead);
@@ -828,7 +829,7 @@ export async function getTableExtension() {
     m.rows.forEach((row, r) => {
       const tr = document.createElement("tr");
       row.forEach((raw, c) =>
-        tr.appendChild(makeCell("td", r, c, raw, m.aligns[c])),
+        tr.appendChild(makeCell("td", r, c, raw, m.aligns[c], editable)),
       );
       tbody.appendChild(tr);
     });
@@ -862,6 +863,13 @@ export async function getTableExtension() {
     wrap.className = "cm-md-table-wrap";
     wrap._isMdTable = true;
     wrap.contentEditable = "false";
+    // Read mode builds a display-only table: everything below that exists to
+    // MUTATE the document is skipped outright rather than hidden, so there is
+    // nothing to hover, click, focus or right-click into. What survives is
+    // what a reader needs — the rendered table, its horizontal scroller, and
+    // the floating scrollbar thumb that drives it.
+    const readOnly = !!wrap._readOnly;
+    if (readOnly) wrap.classList.add("cm-md-table-readonly");
 
     // The table sits in its own horizontal scroller so a wide table pans
     // INSIDE the widget instead of being clipped by the editor's
@@ -968,6 +976,18 @@ export async function getTableExtension() {
       ro.disconnect();
       bar.destroy();
     };
+
+    if (readOnly) {
+      // Right-click opens nothing: the table's own menu is never wired up
+      // below, and the event is stopped here so the editor's document-level
+      // menu (Cut/Paste/Bold/…) can't surface over the table either. Delete
+      // this listener if that app menu should still be reachable in read mode.
+      wrap.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      return;
+    }
 
     const topGutter = document.createElement("div");
     topGutter.className = "cm-md-table-gutter cm-md-table-gutter-top";
@@ -1186,22 +1206,29 @@ export async function getTableExtension() {
   }
 
   class TableWidget extends WidgetType {
-    constructor(text) {
+    constructor(text, readOnly) {
       super();
       this.text = text;
+      this.readOnly = !!readOnly;
       this.model = parseTable(text);
     }
     eq(other) {
-      return other.text === this.text;
+      return other.text === this.text && other.readOnly === this.readOnly;
     }
     toDOM(view) {
       const wrap = document.createElement("div");
       wrap._model = this.model;
+      wrap._readOnly = this.readOnly;
       buildDOM(wrap, view);
       return wrap;
     }
     updateDOM(dom, view) {
       if (!dom._isMdTable) return false;
+      // An editable table and a read-mode one are different DOM entirely
+      // (handles, bars and listeners exist or don't), so a mode flip can't be
+      // patched in place — returning false makes CodeMirror throw this one
+      // away and call toDOM() again.
+      if (!!dom._readOnly !== this.readOnly) return false;
       dom._model = this.model;
       const m = this.model;
       const sameDims =
@@ -1238,7 +1265,12 @@ export async function getTableExtension() {
       if (dom._destroyHBar) dom._destroyHBar();
     }
     ignoreEvent() {
-      return true;
+      // Editable tables handle their own mouse work (cell focus, rectangle
+      // selection, handles), so CodeMirror must keep its hands off. A
+      // read-mode table has no such handling, and the one thing it must
+      // support is selection — so events go to CodeMirror instead, which
+      // selects across the block the same way it does for any other content.
+      return !this.readOnly;
     }
   }
 
@@ -1279,9 +1311,17 @@ export async function getTableExtension() {
     return ranges;
   }
 
+  // In read mode there is nothing to edit, so there is no reason to ever drop
+  // a table back to its source — the selection just passes over rendered
+  // tables. Both facets are checked because read-only and non-editable are
+  // separate switches in CodeMirror and either one means "reader".
+  const isReadMode = (state) =>
+    state.readOnly || state.facet(EditorView.editable) === false;
+
   // Reveal the raw markdown whenever the selection touches the table — that is
   // what makes the source itself selectable and copyable with a normal drag.
   const isRevealed = (state, r) => {
+    if (isReadMode(state)) return false;
     const sel = state.selection.main;
     return sel.from <= r.to && sel.to >= r.from;
   };
@@ -1335,11 +1375,15 @@ export async function getTableExtension() {
 
   function buildDecosFromRanges(state, ranges, revealed) {
     const decos = [];
+    const readOnly = isReadMode(state);
     for (const r of ranges) {
       if (revealed.has(r.from)) continue;
       decos.push(
         Decoration.replace({
-          widget: new TableWidget(state.doc.sliceString(r.from, r.to)),
+          widget: new TableWidget(
+            state.doc.sliceString(r.from, r.to),
+            readOnly,
+          ),
           block: true,
         }).range(r.from, r.to),
       );
@@ -1361,7 +1405,12 @@ export async function getTableExtension() {
     update(value, tr) {
       const tree = syntaxTree(tr.state);
       const treeChanged = tree !== value.tree;
-      if (!tr.docChanged && !tr.selection && !treeChanged) return value;
+      // Switching in or out of read mode changes what should be revealed but
+      // touches neither the doc, the selection, nor the tree, so it needs its
+      // own trigger or the old state would linger until the next edit.
+      const modeChanged = isReadMode(tr.startState) !== isReadMode(tr.state);
+      if (!tr.docChanged && !tr.selection && !treeChanged && !modeChanged)
+        return value;
       let ranges = value.ranges;
       if (tr.docChanged) {
         const mapped = [];
@@ -1400,6 +1449,7 @@ export async function getTableExtension() {
       // decoration set instead of re-parsing every table into a fresh widget.
       if (
         !tr.docChanged &&
+        !modeChanged &&
         ranges === value.ranges &&
         sameSet(revealed, value.revealed)
       )

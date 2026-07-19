@@ -40,6 +40,11 @@ const TRACE = false;
 export const getEditorView = () => editorView;
 export function setEditorView(v) {
   editorView = v;
+  // A file switch builds a fresh view whose config knows nothing about
+  // reading mode, so re-assert it here rather than making every call site
+  // remember to. Cheap and idempotent: it returns immediately when the view
+  // already matches the stored per-file state.
+  if (v) applyReadingModeToEditor(v);
 }
 
 export const getCurrentOpenFile = () => currentOpenFile;
@@ -49,6 +54,10 @@ export function setCurrentOpenFile(path) {
       `[editorState] currentOpenFile: ${currentOpenFile} → ${path}`,
     );
   currentOpenFile = path;
+  // Reading mode is remembered per file, so the answer changes here too. The
+  // two call orders (view first, then path — or the reverse) are both covered
+  // because setEditorView() re-asserts as well.
+  applyReadingModeToEditor();
   // One-way mirror for the separately-bundled markdown-preview.js, which reads
   // window.app.currentOpenFile to resolve relative image/link paths. editorState
   // remains the single owner/writer.
@@ -90,6 +99,74 @@ export function setPanzoom(p) {
 export const getFileScrollPositions = () => fileScrollPositions;
 export const getFileCursorPositions = () => fileCursorPositions;
 export const getFileReadingModeStates = () => fileReadingModeStates;
+
+// ── Reading mode ⇄ CodeMirror ──────────────────────────────────────────────
+// Reading mode used to be cosmetic only: a `reading-mode` class plus a raw
+// contentDOM.setAttribute("contenteditable", "false") from app.js. CodeMirror
+// owns that attribute — it re-asserts it from the EditorView.editable facet on
+// its next update — so the write was both fragile and, more importantly,
+// invisible to the editor's own state. The live-preview extensions had no way
+// to tell they were in a reader, which is why markdown, math and tables all
+// still revealed their raw source on click and why table editing UI kept
+// showing up. Setting the real facets fixes both ends at once: CodeMirror
+// stops accepting input and manages contenteditable itself, and
+// markdown-preview.js / markdown-table.js can gate reveal on state.readOnly.
+//
+// The facets go in a Compartment so they can be swapped per toggle. The view
+// is rebuilt on every file switch, so the compartment is stored ON the view
+// rather than in module scope — reconfiguring a compartment that isn't in a
+// given state's config is a silent no-op, which is exactly the bug this
+// avoids. The first call for a view appends it; later calls reconfigure.
+let cmModulePromise = null;
+let cmWarned = false;
+
+function cmApi() {
+  const mods = codeMirrorModules;
+  if (mods && mods.Compartment && mods.StateEffect)
+    return Promise.resolve(mods);
+  if (!cmModulePromise) cmModulePromise = import("../libs/codemirror.js");
+  return cmModulePromise;
+}
+
+export async function applyReadingModeToEditor(view = editorView) {
+  if (!view || view.destroyed) return;
+  const want = !!fileReadingModeStates[currentOpenFile];
+  if (view.state.readOnly === want) return;
+
+  const cm = await cmApi();
+  const { Compartment, EditorState, EditorView, StateEffect } = cm || {};
+  if (!Compartment || !StateEffect) {
+    if (!cmWarned) {
+      cmWarned = true;
+      console.log(
+        "[editorState] reading mode needs Compartment/StateEffect from the " +
+          "CodeMirror bundle — rebuild js/libs/codemirror.js from " +
+          "codemirror-entry.js (npx esbuild …).",
+      );
+    }
+    return;
+  }
+  // The await above yields; the view can be torn down by a file switch in
+  // between, and dispatching into a dead view throws.
+  if (view.destroyed || (editorView && view !== editorView)) return;
+
+  const cfg = [
+    EditorState.readOnly.of(want),
+    EditorView.editable.of(!want),
+  ];
+  if (view._readingModeCompartment) {
+    view.dispatch({
+      effects: view._readingModeCompartment.reconfigure(cfg),
+    });
+  } else {
+    view._readingModeCompartment = new Compartment();
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        view._readingModeCompartment.of(cfg),
+      ),
+    });
+  }
+}
 
 // Persistence co-located with the data so callers stop hand-rolling
 // JSON.stringify at every call site.

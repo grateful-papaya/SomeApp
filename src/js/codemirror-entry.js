@@ -9,7 +9,16 @@
 // markdown-preview.js. Every name below was verified against the installed
 // package's actual exports (not assumed) before being added here.
 
-export { EditorState, Prec, StateField } from "@codemirror/state";
+// Compartment + StateEffect are what let reading mode reconfigure the live
+// editor: editorState.js appends a compartment holding EditorState.readOnly /
+// EditorView.editable and swaps its contents on every toggle.
+export {
+  Compartment,
+  EditorState,
+  Prec,
+  StateEffect,
+  StateField,
+} from "@codemirror/state";
 export {
   Decoration,
   EditorView,

@@ -850,9 +850,11 @@ function makeItem(node, depth, isVirtual, isPinnedCopy) {
         if (titleInput) {
           titleInput.readOnly = isReadingMode;
         }
-        if (isReadingMode && getEditorView().contentDOM) {
-          getEditorView().contentDOM.setAttribute("contenteditable", "false");
-        }
+        // The reading-mode contenteditable write that used to live here is
+        // gone: setEditorView() above now routes this file's stored reading
+        // mode through EditorState.readOnly / EditorView.editable, which is
+        // both what CodeMirror actually honors and what the live-preview
+        // extensions read to keep everything rendered.
 
         const savedScroll = getFileScrollPositions()?.[node.path] || 0;
         if (savedScroll > 0) {
