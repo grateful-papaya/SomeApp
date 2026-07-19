@@ -169,7 +169,7 @@ button[type="button"]:hover {
 
 /* quit button hover emphasis */
 #quit-btn:hover {
-    background-color: #e57373;
+    background-color: #E86060;
 }
 
 /* title-bar button layout (more specific than button[type="button"]) */
