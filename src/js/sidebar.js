@@ -23,6 +23,7 @@ import {
   setIsRenaming,
 } from "./state/treeState.js";
 import { getVaultPath } from "./state/appState.js";
+import { serializeTable } from "./markdown/table-model.js";
 import {
   getEditorView,
   setEditorView,
@@ -231,6 +232,7 @@ const ContextMenuManager = (() => {
     setDisabled("ctx-main-bold", !(hasEditor && !isReading));
     setDisabled("ctx-main-italic", !(hasEditor && !isReading));
     setDisabled("ctx-main-inline-code", !(hasEditor && !isReading));
+    setDisabled("ctx-main-table", !(hasEditor && !isReading));
     setDisabled("ctx-main-save", !(hasEditor && openFile && !isImage));
     setDisabled("ctx-main-copy-path", !openFile);
     setDisabled("ctx-main-reveal", !openFile);
@@ -977,6 +979,40 @@ const EditorMenuActions = (() => {
     }
   };
 
+  // Insert an empty GFM table at the caret. serializeTable() does the column
+  // padding, so what lands in the doc is already aligned and round-trips
+  // through markdown-table.js's editor unchanged.
+  //
+  // A table is a block: smartTable's leaf parser starts at the header row, so
+  // a non-blank line directly above would be swallowed as that header and the
+  // real header becomes the delimiter — the whole block then fails to form.
+  // Hence the blank line above whenever the current line has content.
+  const insertTable = (cols = 2, rows = 1) => {
+    const view = getLiveEditor();
+    if (!view || isReadingMode()) return;
+
+    const md = serializeTable({
+      header: Array.from({ length: cols }, () => ``),
+      aligns: Array(cols).fill(null),
+      rows: Array.from({ length: rows }, () => Array(cols).fill("")),
+    });
+
+    const { state } = view;
+    const line = state.doc.lineAt(state.selection.main.head);
+    const at = line.to;
+    const before = line.text.trim() === "" ? "" : "\n\n";
+    const after = at === state.doc.length ? "\n" : "\n\n";
+
+    view.dispatch({
+      changes: { from: at, insert: before + md + after },
+      // +2 clears the leading "| " of the header row, parking the caret on
+      // the first cell's text so it can be typed over immediately.
+      selection: { anchor: at + before.length + 1 },
+      scrollIntoView: true,
+    });
+    view.focus({ preventScroll: true });
+  };
+
   const showInFolder = async () => {
     const path = getCurrentOpenFile();
     if (!path) return;
@@ -992,6 +1028,7 @@ const EditorMenuActions = (() => {
     paste,
     selectAll,
     toggleInlineMark,
+    insertTable,
     saveNow,
     copyPath,
     showInFolder,
@@ -1076,6 +1113,7 @@ function initSidebarContextMenu() {
   bindMainItem("ctx-main-inline-code", () =>
     EditorMenuActions.toggleInlineMark("`"),
   );
+  bindMainItem("ctx-main-table", () => EditorMenuActions.insertTable());
   bindMainItem("ctx-main-save", EditorMenuActions.saveNow);
   bindMainItem("ctx-main-copy-path", EditorMenuActions.copyPath);
   bindMainItem("ctx-main-show-in-folder", EditorMenuActions.showInFolder);
